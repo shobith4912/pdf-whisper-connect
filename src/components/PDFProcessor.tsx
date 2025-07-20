@@ -2,10 +2,7 @@ import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Configure PDF.js worker for offline use
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
