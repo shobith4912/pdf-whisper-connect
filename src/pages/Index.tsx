@@ -137,10 +137,11 @@ const Index = () => {
                   mode="persona"
                 />
                 
-                {personaFiles.length > 0 && (
+                {personaFiles.length >= 3 && (
                   <PersonaForm
                     onSubmit={handlePersonaAnalysis}
                     isProcessing={isProcessing}
+                    filesCount={personaFiles.length}
                   />
                 )}
               </div>

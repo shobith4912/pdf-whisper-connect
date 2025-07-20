@@ -16,6 +16,7 @@ export const PDFUploader = ({ onFilesSelected, isProcessing, mode }: PDFUploader
   const { toast } = useToast();
 
   const maxFiles = mode === 'outline' ? 1 : 10;
+  const minFiles = mode === 'outline' ? 1 : 3;
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -54,6 +55,15 @@ export const PDFUploader = ({ onFilesSelected, isProcessing, mode }: PDFUploader
       return;
     }
 
+    if (mode === 'persona' && files.length < minFiles) {
+      toast({
+        title: "Not enough files",
+        description: `Minimum ${minFiles} PDFs required for persona analysis.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSelectedFiles(files);
     onFilesSelected(files);
   }, [maxFiles, mode, onFilesSelected, toast]);
@@ -65,6 +75,15 @@ export const PDFUploader = ({ onFilesSelected, isProcessing, mode }: PDFUploader
       toast({
         title: "Too many files",
         description: `Maximum ${maxFiles} PDF${maxFiles > 1 ? 's' : ''} allowed for ${mode} mode.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (mode === 'persona' && files.length < minFiles) {
+      toast({
+        title: "Not enough files",
+        description: `Minimum ${minFiles} PDFs required for persona analysis.`,
         variant: "destructive",
       });
       return;
@@ -121,7 +140,7 @@ export const PDFUploader = ({ onFilesSelected, isProcessing, mode }: PDFUploader
                 : `Drop PDF${maxFiles > 1 ? 's' : ''} here or click to upload`}
             </p>
             <p className="text-sm text-muted-foreground">
-              Maximum {maxFiles} file{maxFiles > 1 ? 's' : ''}, up to 50 pages each
+              {mode === 'persona' ? `${minFiles}-${maxFiles} files required` : `Maximum ${maxFiles} file${maxFiles > 1 ? 's' : ''}`}, up to 50 pages each
             </p>
           </label>
         </div>

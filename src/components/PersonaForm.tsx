@@ -8,9 +8,10 @@ import { User, Target } from 'lucide-react';
 interface PersonaFormProps {
   onSubmit: (persona: string, jobToBeDone: string) => void;
   isProcessing: boolean;
+  filesCount: number;
 }
 
-export const PersonaForm = ({ onSubmit, isProcessing }: PersonaFormProps) => {
+export const PersonaForm = ({ onSubmit, isProcessing, filesCount }: PersonaFormProps) => {
   const [persona, setPersona] = useState('');
   const [jobToBeDone, setJobToBeDone] = useState('');
 
@@ -46,7 +47,7 @@ export const PersonaForm = ({ onSubmit, isProcessing }: PersonaFormProps) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <User className="h-5 w-5" />
-          Define Persona & Task
+          Define Persona & Task ({filesCount} documents ready)
         </CardTitle>
       </CardHeader>
       <CardContent>
