@@ -107,15 +107,21 @@ const Index = () => {
               </CardHeader>
               <CardContent className="space-y-6">
                 <PDFUploader
-                  onFilesSelected={(files) => {
-                    setOutlineFiles(files);
-                    if (files.length > 0) {
-                      handleOutlineExtraction();
-                    }
-                  }}
+                  onFilesSelected={setOutlineFiles}
                   isProcessing={isProcessing}
                   mode="outline"
                 />
+                
+                {outlineFiles.length > 0 && !isProcessing && outlineResults.length === 0 && (
+                  <div className="flex justify-center">
+                    <button
+                      onClick={handleOutlineExtraction}
+                      className="px-6 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors font-medium"
+                    >
+                      Analyze Document Structure
+                    </button>
+                  </div>
+                )}
                 
                 {outlineResults.length > 0 && (
                   <ResultsDisplay
