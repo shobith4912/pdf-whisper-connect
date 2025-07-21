@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js worker for Vite development
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+// Configure PDF.js to work without worker for development
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
