@@ -1,8 +1,15 @@
 import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js to work without worker for development
-pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+// Configure PDF.js worker to work in all environments
+try {
+  // Try multiple worker sources for offline compatibility
+  if (typeof window !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+  }
+} catch (error) {
+  console.warn('PDF worker setup failed, falling back to inline worker');
+}
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
@@ -41,8 +48,15 @@ export const usePDFProcessor = () => {
   const extractPDFOutline = async (file: File): Promise<PDFOutline> => {
     setIsProcessing(true);
     try {
+      // Ensure worker is configured before processing
+      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+      }
+      
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pdf = await pdfjsLib.getDocument({ 
+        data: arrayBuffer
+      }).promise;
       
       const outline: OutlineItem[] = [];
       let title = file.name.replace('.pdf', '');
@@ -123,6 +137,11 @@ export const usePDFProcessor = () => {
   ): Promise<PersonaAnalysis> => {
     setIsProcessing(true);
     try {
+      // Ensure worker is configured before processing
+      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+      }
+      
       const documents = files.map(f => f.name);
       const extractedSections: PersonaAnalysis['extractedSections'] = [];
       const subSectionAnalysis: PersonaAnalysis['subSectionAnalysis'] = [];
