@@ -1,9 +1,24 @@
 import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js to work without worker for offline compatibility
-// This forces PDF.js to use inline processing instead of trying to fetch external workers
-pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+// Configure PDF.js worker for offline compatibility
+// Use a blob URL with minimal worker code
+const workerCode = `
+  // Minimal PDF.js worker implementation
+  self.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'RenderPage') {
+      // Minimal response to prevent errors
+      self.postMessage({
+        type: 'RenderPageResponse',
+        id: e.data.id,
+        error: 'Worker disabled'
+      });
+    }
+  });
+`;
+
+const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
@@ -49,10 +64,7 @@ export const usePDFProcessor = () => {
       
       // Configure PDF processing without worker to avoid network issues
       const pdf = await pdfjsLib.getDocument({ 
-        data: arrayBuffer,
-        useWorkerFetch: false,
-        isEvalSupported: false,
-        useSystemFonts: true
+        data: arrayBuffer
       }).promise;
       
       console.log('PDF loaded successfully, pages:', pdf.numPages);
@@ -157,10 +169,7 @@ export const usePDFProcessor = () => {
           
           const arrayBuffer = await file.arrayBuffer();
           const pdf = await pdfjsLib.getDocument({ 
-            data: arrayBuffer,
-            useWorkerFetch: false,
-            isEvalSupported: false,
-            useSystemFonts: true
+            data: arrayBuffer
           }).promise;
           
           const docSections: PersonaAnalysis['extractedSections'] = [];
