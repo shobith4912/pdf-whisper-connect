@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Disable PDF.js worker entirely for offline compatibility
-// This forces PDF.js to process everything in the main thread
-(pdfjsLib.GlobalWorkerOptions as any).workerSrc = '';
+// Disable worker for offline reliability - process in main thread
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
@@ -41,94 +40,89 @@ export const usePDFProcessor = () => {
 
   const extractPDFOutline = async (file: File): Promise<PDFOutline> => {
     setIsProcessing(true);
+    
     try {
-      console.log('Starting PDF outline extraction for:', file.name);
-      
       const arrayBuffer = await file.arrayBuffer();
-      console.log('File loaded, size:', arrayBuffer.byteLength);
-      
-      // Configure PDF processing without worker to avoid network issues
-      const pdf = await pdfjsLib.getDocument({ 
-        data: arrayBuffer
-      }).promise;
-      
-      console.log('PDF loaded successfully, pages:', pdf.numPages);
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
       
       const outline: OutlineItem[] = [];
       let title = file.name.replace('.pdf', '');
       
-      // Try to get document info for title
+      // Extract title from metadata with proper typing
       try {
-        const info = await pdf.getMetadata();
-        if (info.info && typeof info.info === 'object' && 'Title' in info.info && info.info.Title) {
-          title = info.info.Title as string;
+        const metadata = await pdf.getMetadata();
+        if (metadata.info && typeof metadata.info === 'object' && 'Title' in metadata.info) {
+          const titleValue = (metadata.info as any).Title;
+          if (typeof titleValue === 'string' && titleValue.trim()) {
+            title = titleValue;
+          }
         }
-      } catch (error) {
-        console.warn('Could not extract metadata:', error);
+      } catch (e) {
+        // Fallback to filename
       }
-
-      // Process each page with better error handling
-      const maxPages = Math.min(pdf.numPages, 50);
-      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+      
+      // Process pages to find headings
+      const numPages = Math.min(pdf.numPages, 25); // Limit for performance
+      
+      for (let pageNum = 1; pageNum <= numPages; pageNum++) {
         try {
           const page = await pdf.getPage(pageNum);
           const textContent = await page.getTextContent();
           
-          // Analyze text items for headings
-          const textItems = textContent.items.filter(item => 
-            'str' in item && item.str.trim().length > 0
+          // Simple heading detection based on font size and position
+          const items = textContent.items.filter(item => 
+            'str' in item && (item as any).str.trim().length > 0
           ) as any[];
           
-          // Group by font size and detect headings
-          const fontSizes = new Map<number, string[]>();
+          if (items.length === 0) continue;
           
-          textItems.forEach(item => {
+          // Find potential headings by font size
+          const fontSizes = new Map<number, any[]>();
+          items.forEach(item => {
             if (item.height && item.str) {
-              const fontSize = Math.round(item.height);
-              if (!fontSizes.has(fontSize)) {
-                fontSizes.set(fontSize, []);
+              const height = Math.round(item.height);
+              if (!fontSizes.has(height)) {
+                fontSizes.set(height, []);
               }
-              fontSizes.get(fontSize)!.push(item.str.trim());
+              fontSizes.get(height)!.push(item);
             }
           });
           
-          // Sort font sizes (largest first)
+          // Get largest font sizes (likely headings)
           const sortedSizes = Array.from(fontSizes.keys()).sort((a, b) => b - a);
           
-          // Detect headings based on font size patterns
-          sortedSizes.slice(0, 4).forEach((fontSize, index) => {
-            const texts = fontSizes.get(fontSize) || [];
-            texts.forEach(text => {
-              if (text.length > 3 && text.length < 100 && !text.includes('.') && /^[A-Z]/.test(text)) {
+          sortedSizes.slice(0, 3).forEach((size, index) => {
+            const sizeItems = fontSizes.get(size) || [];
+            sizeItems.forEach(item => {
+              const text = item.str.trim();
+              if (text.length > 5 && text.length < 100 && /^[A-Z]/.test(text)) {
                 const level = index === 0 ? 'H1' : index === 1 ? 'H2' : 'H3';
                 outline.push({
-                  level: level as 'H1' | 'H2' | 'H3',
-                  text: text,
+                  level: level as any,
+                  text,
                   page: pageNum
                 });
               }
             });
           });
         } catch (pageError) {
-          console.warn(`Error processing page ${pageNum}:`, pageError);
-          // Continue with next page instead of failing completely
+          console.log(`Skipping page ${pageNum} due to error:`, pageError);
         }
       }
       
-      // Remove duplicates and sort
-      const uniqueOutline = outline.filter((item, index, arr) => 
-        arr.findIndex(other => other.text === item.text && other.page === item.page) === index
-      ).sort((a, b) => a.page - b.page);
+      // Remove duplicates and sort by page
+      const uniqueOutline = outline
+        .filter((item, index, arr) => 
+          arr.findIndex(other => other.text === item.text && other.page === item.page) === index
+        )
+        .sort((a, b) => a.page - b.page);
       
-      console.log('Extraction completed, found', uniqueOutline.length, 'outline items');
+      return { title, outline: uniqueOutline };
       
-      return {
-        title,
-        outline: uniqueOutline
-      };
     } catch (error) {
-      console.error('Error processing PDF:', error);
-      throw new Error('Failed to process PDF. Please ensure it\'s a valid PDF file.');
+      console.error('PDF processing error:', error);
+      throw new Error('Could not process PDF file. Please try a different file.');
     } finally {
       setIsProcessing(false);
     }
@@ -140,30 +134,21 @@ export const usePDFProcessor = () => {
     jobToBeDone: string
   ): Promise<PersonaAnalysis> => {
     setIsProcessing(true);
+    
     try {
-      console.log('Starting persona analysis for', files.length, 'documents');
-      
-      const documents = files.map(f => f.name);
       const extractedSections: PersonaAnalysis['extractedSections'] = [];
       const subSectionAnalysis: PersonaAnalysis['subSectionAnalysis'] = [];
       
-      // Process documents sequentially to avoid overwhelming the system
-      for (const file of files) {
+      // Process each file
+      for (const file of files.slice(0, 5)) { // Limit files for reliability
         try {
-          console.log('Processing document:', file.name);
-          
           const arrayBuffer = await file.arrayBuffer();
-          const pdf = await pdfjsLib.getDocument({ 
-            data: arrayBuffer
-          }).promise;
+          const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+          const pdf = await loadingTask.promise;
           
-          const docSections: PersonaAnalysis['extractedSections'] = [];
-          const docSubsections: PersonaAnalysis['subSectionAnalysis'] = [];
+          const numPages = Math.min(pdf.numPages, 10); // Limit pages
           
-          // Process pages with controlled concurrency
-          const maxPages = Math.min(pdf.numPages, 15);
-          
-          for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+          for (let pageNum = 1; pageNum <= numPages; pageNum++) {
             try {
               const page = await pdf.getPage(pageNum);
               const textContent = await page.getTextContent();
@@ -174,78 +159,58 @@ export const usePDFProcessor = () => {
                 .join(' ')
                 .trim();
               
-              if (pageText.length < 50) continue;
+              if (pageText.length < 100) continue;
               
-              // Enhanced relevance scoring
-              const relevanceScore = calculateEnhancedRelevanceScore(pageText, persona, jobToBeDone);
+              // Simple relevance scoring
+              const relevanceScore = calculateRelevance(pageText, persona, jobToBeDone);
               
-              // Extract meaningful sections (paragraphs, headings)
-              const sections = extractMeaningSections(pageText);
-              
-              sections.forEach((section, index) => {
-                const sectionScore = calculateEnhancedRelevanceScore(section.text, persona, jobToBeDone);
+              if (relevanceScore > 0.3) {
+                extractedSections.push({
+                  document: file.name,
+                  pageNumber: pageNum,
+                  sectionTitle: `Page ${pageNum} Content`,
+                  importanceRank: Math.round(relevanceScore * 10)
+                });
                 
-                if (sectionScore > 0.2) {
-                  docSections.push({
+                // Extract key sentences
+                const sentences = pageText.split(/[.!?]+/)
+                  .filter(s => s.trim().length > 50)
+                  .slice(0, 3);
+                
+                if (sentences.length > 0) {
+                  subSectionAnalysis.push({
                     document: file.name,
-                    pageNumber: pageNum,
-                    sectionTitle: section.title || `Section ${index + 1}`,
-                    importanceRank: Math.round(sectionScore * 10)
+                    refinedText: sentences.join('. ') + '.',
+                    pageNumber: pageNum
                   });
-                  
-                  // Extract relevant subsections
-                  const sentences = section.text.split(/[.!?]+/).filter(s => s.trim().length > 30);
-                  const relevantSentences = sentences
-                    .map(sentence => ({
-                      text: sentence.trim(),
-                      score: calculateEnhancedRelevanceScore(sentence, persona, jobToBeDone)
-                    }))
-                    .filter(item => item.score > 0.3)
-                    .sort((a, b) => b.score - a.score)
-                    .slice(0, 2);
-                  
-                  if (relevantSentences.length > 0) {
-                    docSubsections.push({
-                      document: file.name,
-                      refinedText: relevantSentences.map(s => s.text).join('. ') + '.',
-                      pageNumber: pageNum
-                    });
-                  }
                 }
-              });
+              }
             } catch (pageError) {
-              console.warn(`Error processing page ${pageNum} of ${file.name}:`, pageError);
-              // Continue with next page
+              console.log(`Skipping page ${pageNum} of ${file.name}`);
             }
           }
-          
-          extractedSections.push(...docSections);
-          subSectionAnalysis.push(...docSubsections);
-          
-        } catch (docError) {
-          console.warn(`Error processing document ${file.name}:`, docError);
-          // Continue with next document
+        } catch (fileError) {
+          console.log(`Skipping file ${file.name}`);
         }
       }
       
-      // Sort by importance and limit results
+      // Sort by relevance
       extractedSections.sort((a, b) => b.importanceRank - a.importanceRank);
-      
-      console.log('Analysis completed:', extractedSections.length, 'sections,', subSectionAnalysis.length, 'subsections');
       
       return {
         metadata: {
-          documents,
+          documents: files.map(f => f.name),
           persona,
           jobToBeDone,
           timestamp: new Date().toISOString()
         },
-        extractedSections: extractedSections.slice(0, 15),
-        subSectionAnalysis: subSectionAnalysis.slice(0, 20)
+        extractedSections: extractedSections.slice(0, 10),
+        subSectionAnalysis: subSectionAnalysis.slice(0, 15)
       };
+      
     } catch (error) {
-      console.error('Error analyzing documents:', error);
-      throw new Error('Failed to analyze documents for persona.');
+      console.error('Persona analysis error:', error);
+      throw new Error('Could not analyze documents. Please try again.');
     } finally {
       setIsProcessing(false);
     }
@@ -258,129 +223,26 @@ export const usePDFProcessor = () => {
   };
 };
 
-// Enhanced relevance scoring function
-function calculateEnhancedRelevanceScore(text: string, persona: string, jobToBeDone: string): number {
+// Simple relevance calculation
+function calculateRelevance(text: string, persona: string, jobToBeDone: string): number {
   const lowerText = text.toLowerCase();
-  const personaKeywords = extractKeywords(persona.toLowerCase());
-  const jobKeywords = extractKeywords(jobToBeDone.toLowerCase());
+  const personaWords = persona.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  const jobWords = jobToBeDone.toLowerCase().split(/\s+/).filter(w => w.length > 2);
   
   let score = 0;
-  const words = lowerText.split(/\s+/);
-  const totalWords = words.length;
+  const totalWords = lowerText.split(/\s+/).length;
   
-  if (totalWords === 0) return 0;
-  
-  // Score based on persona keywords with context
-  personaKeywords.forEach(keyword => {
-    if (keyword.length > 2) {
-      const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-      const matches = (lowerText.match(regex) || []).length;
-      score += (matches / totalWords) * 0.8;
-      
-      // Bonus for keyword proximity to other relevant terms
-      const contextBonus = calculateContextBonus(lowerText, keyword, [...personaKeywords, ...jobKeywords]);
-      score += contextBonus;
-    }
+  // Count persona keyword matches
+  personaWords.forEach(word => {
+    const matches = (lowerText.match(new RegExp(`\\b${word}\\b`, 'g')) || []).length;
+    score += matches / totalWords;
   });
   
-  // Score based on job keywords with higher weight
-  jobKeywords.forEach(keyword => {
-    if (keyword.length > 2) {
-      const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-      const matches = (lowerText.match(regex) || []).length;
-      score += (matches / totalWords) * 1.2;
-      
-      // Bonus for keyword proximity
-      const contextBonus = calculateContextBonus(lowerText, keyword, [...personaKeywords, ...jobKeywords]);
-      score += contextBonus * 1.2;
-    }
-  });
-  
-  // Bonus for academic/professional terms
-  const professionalTerms = ['analysis', 'research', 'study', 'method', 'approach', 'results', 'conclusion', 'data', 'findings'];
-  professionalTerms.forEach(term => {
-    if (lowerText.includes(term)) {
-      score += 0.1;
-    }
+  // Count job keyword matches (higher weight)
+  jobWords.forEach(word => {
+    const matches = (lowerText.match(new RegExp(`\\b${word}\\b`, 'g')) || []).length;
+    score += (matches / totalWords) * 1.5;
   });
   
   return Math.min(score, 1);
-}
-
-// Extract meaningful keywords from text
-function extractKeywords(text: string): string[] {
-  const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'shall']);
-  
-  return text.split(/\s+/)
-    .filter(word => word.length > 2 && !stopWords.has(word))
-    .map(word => word.replace(/[^\w]/g, ''))
-    .filter(word => word.length > 2);
-}
-
-// Calculate context bonus for keyword proximity
-function calculateContextBonus(text: string, keyword: string, allKeywords: string[]): number {
-  const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-  let match;
-  let bonus = 0;
-  
-  while ((match = regex.exec(text)) !== null) {
-    const contextStart = Math.max(0, match.index - 100);
-    const contextEnd = Math.min(text.length, match.index + keyword.length + 100);
-    const context = text.slice(contextStart, contextEnd).toLowerCase();
-    
-    // Check for other keywords in proximity
-    allKeywords.forEach(otherKeyword => {
-      if (otherKeyword !== keyword && context.includes(otherKeyword)) {
-        bonus += 0.05;
-      }
-    });
-  }
-  
-  return Math.min(bonus, 0.3);
-}
-
-// Extract meaningful sections from text
-function extractMeaningSections(text: string): Array<{ title: string; text: string }> {
-  const sections: Array<{ title: string; text: string }> = [];
-  
-  // Split by double line breaks or long whitespace to identify paragraphs
-  const paragraphs = text.split(/\n\s*\n|\.\s{3,}/).filter(p => p.trim().length > 50);
-  
-  paragraphs.forEach((paragraph, index) => {
-    const cleanParagraph = paragraph.trim();
-    if (cleanParagraph.length > 50) {
-      // Try to identify if first sentence could be a title/heading
-      const sentences = cleanParagraph.split(/[.!?]+/);
-      const firstSentence = sentences[0]?.trim();
-      
-      let title = `Paragraph ${index + 1}`;
-      let content = cleanParagraph;
-      
-      // If first sentence is short and looks like a heading, use it as title
-      if (firstSentence && firstSentence.length < 80 && firstSentence.length > 10 && sentences.length > 1) {
-        title = firstSentence;
-        content = sentences.slice(1).join('. ').trim();
-      }
-      
-      sections.push({ title, text: content });
-    }
-  });
-  
-  // If no clear paragraphs, split by sentences and group them
-  if (sections.length === 0) {
-    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 30);
-    const chunkSize = Math.max(3, Math.min(8, Math.floor(sentences.length / 4)));
-    
-    for (let i = 0; i < sentences.length; i += chunkSize) {
-      const chunk = sentences.slice(i, i + chunkSize);
-      if (chunk.length > 0) {
-        sections.push({
-          title: `Section ${Math.floor(i / chunkSize) + 1}`,
-          text: chunk.join('. ').trim() + '.'
-        });
-      }
-    }
-  }
-  
-  return sections;
 }
