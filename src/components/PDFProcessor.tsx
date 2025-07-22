@@ -1,15 +1,9 @@
 import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js worker to work in all environments
-try {
-  // Try multiple worker sources for offline compatibility
-  if (typeof window !== 'undefined') {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
-  }
-} catch (error) {
-  console.warn('PDF worker setup failed, falling back to inline worker');
-}
+// Configure PDF.js to work without worker for offline compatibility
+// This forces PDF.js to use inline processing instead of trying to fetch external workers
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
@@ -48,15 +42,20 @@ export const usePDFProcessor = () => {
   const extractPDFOutline = async (file: File): Promise<PDFOutline> => {
     setIsProcessing(true);
     try {
-      // Ensure worker is configured before processing
-      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
-      }
+      console.log('Starting PDF outline extraction for:', file.name);
       
       const arrayBuffer = await file.arrayBuffer();
+      console.log('File loaded, size:', arrayBuffer.byteLength);
+      
+      // Configure PDF processing without worker to avoid network issues
       const pdf = await pdfjsLib.getDocument({ 
-        data: arrayBuffer
+        data: arrayBuffer,
+        useWorkerFetch: false,
+        isEvalSupported: false,
+        useSystemFonts: true
       }).promise;
+      
+      console.log('PDF loaded successfully, pages:', pdf.numPages);
       
       const outline: OutlineItem[] = [];
       let title = file.name.replace('.pdf', '');
@@ -71,52 +70,60 @@ export const usePDFProcessor = () => {
         console.warn('Could not extract metadata:', error);
       }
 
-      // Process each page
-      for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 50); pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        
-        // Analyze text items for headings
-        const textItems = textContent.items.filter(item => 
-          'str' in item && item.str.trim().length > 0
-        ) as any[];
-        
-        // Group by font size and detect headings
-        const fontSizes = new Map<number, string[]>();
-        
-        textItems.forEach(item => {
-          if (item.height && item.str) {
-            const fontSize = Math.round(item.height);
-            if (!fontSizes.has(fontSize)) {
-              fontSizes.set(fontSize, []);
-            }
-            fontSizes.get(fontSize)!.push(item.str.trim());
-          }
-        });
-        
-        // Sort font sizes (largest first)
-        const sortedSizes = Array.from(fontSizes.keys()).sort((a, b) => b - a);
-        
-        // Detect headings based on font size patterns
-        sortedSizes.slice(0, 4).forEach((fontSize, index) => {
-          const texts = fontSizes.get(fontSize) || [];
-          texts.forEach(text => {
-            if (text.length > 3 && text.length < 100 && !text.includes('.') && /^[A-Z]/.test(text)) {
-              const level = index === 0 ? 'H1' : index === 1 ? 'H2' : 'H3';
-              outline.push({
-                level: level as 'H1' | 'H2' | 'H3',
-                text: text,
-                page: pageNum
-              });
+      // Process each page with better error handling
+      const maxPages = Math.min(pdf.numPages, 50);
+      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+        try {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
+          
+          // Analyze text items for headings
+          const textItems = textContent.items.filter(item => 
+            'str' in item && item.str.trim().length > 0
+          ) as any[];
+          
+          // Group by font size and detect headings
+          const fontSizes = new Map<number, string[]>();
+          
+          textItems.forEach(item => {
+            if (item.height && item.str) {
+              const fontSize = Math.round(item.height);
+              if (!fontSizes.has(fontSize)) {
+                fontSizes.set(fontSize, []);
+              }
+              fontSizes.get(fontSize)!.push(item.str.trim());
             }
           });
-        });
+          
+          // Sort font sizes (largest first)
+          const sortedSizes = Array.from(fontSizes.keys()).sort((a, b) => b - a);
+          
+          // Detect headings based on font size patterns
+          sortedSizes.slice(0, 4).forEach((fontSize, index) => {
+            const texts = fontSizes.get(fontSize) || [];
+            texts.forEach(text => {
+              if (text.length > 3 && text.length < 100 && !text.includes('.') && /^[A-Z]/.test(text)) {
+                const level = index === 0 ? 'H1' : index === 1 ? 'H2' : 'H3';
+                outline.push({
+                  level: level as 'H1' | 'H2' | 'H3',
+                  text: text,
+                  page: pageNum
+                });
+              }
+            });
+          });
+        } catch (pageError) {
+          console.warn(`Error processing page ${pageNum}:`, pageError);
+          // Continue with next page instead of failing completely
+        }
       }
       
       // Remove duplicates and sort
       const uniqueOutline = outline.filter((item, index, arr) => 
         arr.findIndex(other => other.text === item.text && other.page === item.page) === index
       ).sort((a, b) => a.page - b.page);
+      
+      console.log('Extraction completed, found', uniqueOutline.length, 'outline items');
       
       return {
         title,
@@ -137,29 +144,34 @@ export const usePDFProcessor = () => {
   ): Promise<PersonaAnalysis> => {
     setIsProcessing(true);
     try {
-      // Ensure worker is configured before processing
-      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
-      }
+      console.log('Starting persona analysis for', files.length, 'documents');
       
       const documents = files.map(f => f.name);
       const extractedSections: PersonaAnalysis['extractedSections'] = [];
       const subSectionAnalysis: PersonaAnalysis['subSectionAnalysis'] = [];
       
-      // Process documents in parallel for better performance
-      const documentPromises = files.map(async (file) => {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const docSections: PersonaAnalysis['extractedSections'] = [];
-        const docSubsections: PersonaAnalysis['subSectionAnalysis'] = [];
-        
-        // Process pages in parallel
-        const pagePromises = [];
-        const maxPages = Math.min(pdf.numPages, 15);
-        
-        for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-          pagePromises.push(
-            pdf.getPage(pageNum).then(async (page) => {
+      // Process documents sequentially to avoid overwhelming the system
+      for (const file of files) {
+        try {
+          console.log('Processing document:', file.name);
+          
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ 
+            data: arrayBuffer,
+            useWorkerFetch: false,
+            isEvalSupported: false,
+            useSystemFonts: true
+          }).promise;
+          
+          const docSections: PersonaAnalysis['extractedSections'] = [];
+          const docSubsections: PersonaAnalysis['subSectionAnalysis'] = [];
+          
+          // Process pages with controlled concurrency
+          const maxPages = Math.min(pdf.numPages, 15);
+          
+          for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+            try {
+              const page = await pdf.getPage(pageNum);
               const textContent = await page.getTextContent();
               
               const pageText = textContent.items
@@ -168,21 +180,19 @@ export const usePDFProcessor = () => {
                 .join(' ')
                 .trim();
               
-              if (pageText.length < 50) return { sections: [], subsections: [] };
+              if (pageText.length < 50) continue;
               
               // Enhanced relevance scoring
               const relevanceScore = calculateEnhancedRelevanceScore(pageText, persona, jobToBeDone);
               
               // Extract meaningful sections (paragraphs, headings)
               const sections = extractMeaningSections(pageText);
-              const pageSections: PersonaAnalysis['extractedSections'] = [];
-              const pageSubsections: PersonaAnalysis['subSectionAnalysis'] = [];
               
               sections.forEach((section, index) => {
                 const sectionScore = calculateEnhancedRelevanceScore(section.text, persona, jobToBeDone);
                 
                 if (sectionScore > 0.2) {
-                  pageSections.push({
+                  docSections.push({
                     document: file.name,
                     pageNumber: pageNum,
                     sectionTitle: section.title || `Section ${index + 1}`,
@@ -201,7 +211,7 @@ export const usePDFProcessor = () => {
                     .slice(0, 2);
                   
                   if (relevantSentences.length > 0) {
-                    pageSubsections.push({
+                    docSubsections.push({
                       document: file.name,
                       refinedText: relevantSentences.map(s => s.text).join('. ') + '.',
                       pageNumber: pageNum
@@ -209,29 +219,25 @@ export const usePDFProcessor = () => {
                   }
                 }
               });
-              
-              return { sections: pageSections, subsections: pageSubsections };
-            })
-          );
+            } catch (pageError) {
+              console.warn(`Error processing page ${pageNum} of ${file.name}:`, pageError);
+              // Continue with next page
+            }
+          }
+          
+          extractedSections.push(...docSections);
+          subSectionAnalysis.push(...docSubsections);
+          
+        } catch (docError) {
+          console.warn(`Error processing document ${file.name}:`, docError);
+          // Continue with next document
         }
-        
-        const pageResults = await Promise.all(pagePromises);
-        pageResults.forEach(result => {
-          docSections.push(...result.sections);
-          docSubsections.push(...result.subsections);
-        });
-        
-        return { sections: docSections, subsections: docSubsections };
-      });
-      
-      const documentResults = await Promise.all(documentPromises);
-      documentResults.forEach(result => {
-        extractedSections.push(...result.sections);
-        subSectionAnalysis.push(...result.subsections);
-      });
+      }
       
       // Sort by importance and limit results
       extractedSections.sort((a, b) => b.importanceRank - a.importanceRank);
+      
+      console.log('Analysis completed:', extractedSections.length, 'sections,', subSectionAnalysis.length, 'subsections');
       
       return {
         metadata: {
