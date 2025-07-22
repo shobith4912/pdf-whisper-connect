@@ -1,24 +1,9 @@
 import { useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js worker for offline compatibility
-// Use a blob URL with minimal worker code
-const workerCode = `
-  // Minimal PDF.js worker implementation
-  self.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'RenderPage') {
-      // Minimal response to prevent errors
-      self.postMessage({
-        type: 'RenderPageResponse',
-        id: e.data.id,
-        error: 'Worker disabled'
-      });
-    }
-  });
-`;
-
-const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
+// Disable PDF.js worker entirely for offline compatibility
+// This forces PDF.js to process everything in the main thread
+(pdfjsLib.GlobalWorkerOptions as any).workerSrc = '';
 
 export interface OutlineItem {
   level: 'H1' | 'H2' | 'H3';
